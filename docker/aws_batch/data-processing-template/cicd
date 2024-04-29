@@ -1,0 +1,47 @@
+#!/bin/bash/
+
+source ./cicd.vars
+ECR_REPO=${ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com
+REPO_IMAGE=$ECR_REPO/$IMAGE_NAME
+JOB_DEFINITION_NAME=$IMAGE_NAME
+JOB_ROLE=IAParallelProcessing-S3Full
+
+GIT_HASH=$(git rev-parse HEAD)
+
+REPO_IMAGE_TAG="${REPO_IMAGE}:${GIT_HASH}"
+AWS_ACCOUNT_ID_IAM_PREFIX=arn:aws:iam::${ACCOUNT_ID}:role/
+
+
+aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin $ECR_REPO
+
+echo $IMAGE_NAME
+docker build -t $IMAGE_NAME .
+
+aws ecr create-repository --region ${REGION} --repository-name $IMAGE_NAME > /dev/null
+
+docker tag $IMAGE_NAME $REPO_IMAGE_TAG && \
+    docker push $REPO_IMAGE_TAG && \
+    aws batch register-job-definition \
+    --job-definition-name $JOB_DEFINITION_NAME \
+    --type container \
+    --timeout attemptDurationSeconds=172800 \
+    --retry-strategy attempts=1 \
+    --region $REGION \
+    --container-properties \
+    '{
+        "image": "'"${REPO_IMAGE_TAG}"'",
+        "jobRoleArn": "'"${AWS_ACCOUNT_ID_IAM_PREFIX}${JOB_ROLE}"'",
+        "volumes": [],
+        "mountPoints": [],
+        "ulimits": [],
+        "resourceRequirements": [
+            {
+                "type": "VCPU",
+                "value": "1"
+            },
+            {
+                "type": "MEMORY",
+                "value": "8000"
+            }
+        ]
+    }'
